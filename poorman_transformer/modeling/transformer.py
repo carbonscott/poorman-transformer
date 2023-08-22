@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class SingleHeadAttention(nn.Module):
-    def __init__(self, embd_size, context_length, head_size, dropout = 0.1):
+    def __init__(self, embd_size, context_length, head_size, dropout = 0.0):
         super().__init__()
 
         self.embd_size = embd_size
@@ -34,6 +34,8 @@ class SingleHeadAttention(nn.Module):
             a : (B, T, H)
                 Nodes (embd per token) updated ('Jiggled') through weighted sum (aggregation).
         """
+        B, T, E = x.shape
+
         # Linearly project them to a vector space...
         q = self.proj_q(x)
         k = self.proj_k(x)
@@ -44,7 +46,7 @@ class SingleHeadAttention(nn.Module):
         w /= torch.sqrt(torch.tensor(self.head_size))
 
         # Masking in the decoder...
-        w[:,self.mask] = float('-inf')    # (B, T, T)
+        w[:,self.mask[:T,:T]] = float('-inf')    # (B, :T, :T)   `:T` means upto `T`
 
         # Obtain the softmax...
         w = w.softmax(dim = -1)
@@ -58,7 +60,7 @@ class SingleHeadAttention(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, embd_size, context_length, head_size, dropout = 0.1):
+    def __init__(self, embd_size, context_length, head_size, dropout = 0.0):
         super().__init__()
 
         num_heads = embd_size // head_size
@@ -84,7 +86,7 @@ class MultiHeadAttention(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self, embd_size, dropout = 0.1):
+    def __init__(self, embd_size, dropout = 0.0):
         super().__init__()
 
         self.ff_layer = nn.Sequential(
@@ -185,9 +187,11 @@ class Transformer(nn.Module):
         Arguments:
             x : (B, T)
         """
+        B, T = x.shape
+
         # ___/ EMBED ALL NODES \___
         nodes_tok_embd = self.tok_embd_layer(x)    # (B, T) -> (B, T, E)
-        nodes_pos_embd = self.pos_embd_layer(self.pos_indices)    # (T) -> (T, E)
+        nodes_pos_embd = self.pos_embd_layer(self.pos_indices[:T])    # (T) -> (T, E)
 
         nodes_embd = nodes_tok_embd + nodes_pos_embd    # (B, T, E) + (T, E)    =
                                                         # (B, T, E) + (1, T, E) = (B, T, E)
@@ -199,6 +203,26 @@ class Transformer(nn.Module):
 
         # ___/ PREDICTION HEAD \___
         nodes_embd_better_norm = self.layernorm(nodes_embd_better)
-        out = self.pred_head(nodes_embd_better_norm)
+        logits = self.pred_head(nodes_embd_better_norm)    # (B, T, E) -> (B, T, N)
 
-        return out
+        return logits
+
+
+    @torch.no_grad()
+    def generate_one(self, x):
+        """
+        Arguments:
+            x : (B, T)
+        """
+        logits = self.forward(x)    # (B, T, N)
+
+        # Look up the logits associated with the last token...
+        last_token_logits = logits[:, -1]
+
+        # Obtain the most probable next token...
+        next_token_probs = last_token_logits.softmax(dim = -1)    # (B, T, N)
+
+        # Sample one from the distribution...
+        next_token_pos = torch.multinomial(next_token_probs, num_samples = 1)
+
+        return next_token_pos
