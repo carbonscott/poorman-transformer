@@ -4,11 +4,12 @@ import torch.nn.functional as F
 
 
 class SingleHeadAttention(nn.Module):
-    def __init__(self, embd_size, head_size):
+    def __init__(self, embd_size, head_size, dropout = 0.1):
         super().__init__()
 
         self.embd_size = embd_size
         self.head_size = head_size
+        self.dropout   = dropout
 
         # Self-attention layer to update each node by aggregating features from all other nodes...
         self.proj_q = nn.Linear(self.embd_size, self.head_size)    # What do I (this node) want?
@@ -17,6 +18,9 @@ class SingleHeadAttention(nn.Module):
 
         # Store a mask to prevent it from gradient tracking...
         self.mask_initialized = False
+
+        # Use dropout after the scaled dot self-attention...
+        self.dropout = nn.Dropout(dropout)
 
 
     def forward(self, x):
@@ -58,15 +62,16 @@ class SingleHeadAttention(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, embd_size, head_size):
+    def __init__(self, embd_size, head_size, dropout = 0.1):
         super().__init__()
 
         num_heads = embd_size // head_size
         self.multi_head_att_layer = nn.ModuleList([ SingleHeadAttention(embd_size, head_size) for _ in range(num_heads) ])
 
-        self.proj_linear = nn.Sequential(
-            nn.Linear(embd_size, embd_size),
-        )
+        self.proj_linear = nn.Linear(embd_size, embd_size)
+
+        # Use dropout at the end...
+        self.dropout = nn.Dropout(dropout)
 
 
     def forward(self, x):
@@ -75,19 +80,22 @@ class MultiHeadAttention(nn.Module):
 
         y = self.proj_linear(y)
 
+        y = self.dropout(y)
+
         return y
 
 
 
 
 class FeedForward(nn.Module):
-    def __init__(self, embd_size):
+    def __init__(self, embd_size, dropout = 0.1):
         super().__init__()
 
         self.ff_layer = nn.Sequential(
             nn.Linear(    embd_size, 4 * embd_size),
             nn.GELU(),
             nn.Linear(4 * embd_size,     embd_size),
+            nn.Dropout(dropout),
         )
 
 
