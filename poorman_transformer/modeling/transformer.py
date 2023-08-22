@@ -15,6 +15,9 @@ class SingleHeadAttention(nn.Module):
         self.proj_k = nn.Linear(self.embd_size, self.head_size)    # What do I have publicly?
         self.proj_v = nn.Linear(self.embd_size, self.head_size)    # What do I provide to update the entire graph?
 
+        # Store a mask to prevent it from gradient tracking...
+        self.mask_initialized = False
+
 
     def forward(self, x):
         """
@@ -36,7 +39,11 @@ class SingleHeadAttention(nn.Module):
         w /= torch.sqrt(torch.tensor(self.head_size))
 
         # Masking in the decoder...
-        mask    = torch.ones_like(w).triu(diagonal=1).bool()
+        # Store a mask to prevent it from gradient tracking
+        if not self.mask_initialized:
+            mask = torch.ones_like(w).triu(diagonal=1).bool()
+            self.register_buffer('mask', mask)
+            self.mask_initialized = True
         w[mask] = float('-inf')
 
         # Obtain the softmax...
