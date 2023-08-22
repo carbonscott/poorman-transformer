@@ -33,19 +33,18 @@ class TinyShakespearDataset(Dataset):
         self.context_length = context_length
         self.sample_size    = sample_size
 
-        self.idx_list = self.create_random_dataset()
+        self.idx_list = []
+        self.update_random_dataset()
 
 
-    def create_random_dataset(self):
+    def update_random_dataset(self):
         data_source    = self.data_source
         context_length = self.context_length
         sample_size    = self.sample_size
 
         # Create the dataset...
         # The rightmost context window is used as a target
-        idx_list = random.choices(list(range(len(data_source) - context_length)), k = sample_size)
-
-        return idx_list
+        self.idx_list = random.choices(list(range(len(data_source) - context_length)), k = sample_size)
 
 
     def __len__(self):
