@@ -78,7 +78,7 @@ def save_checkpoint(model, optimizer, scheduler, epoch, loss_min, path):
         'loss_min'            : loss_min,
         'model_state_dict'    : model.module.state_dict() if hasattr(model, 'module') else model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
+        'scheduler_state_dict': None if scheduler is None else scheduler.state_dict(),
     }, path)
 
 
