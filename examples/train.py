@@ -36,7 +36,7 @@ input_file_path = "input.txt"
 
 with open(input_file_path, 'r') as fh:
     data = fh.read()
-token_lib = list(set(data))
+token_lib = sorted(list(set(data)))
 size_data  = len(data)
 train_frac = 0.9
 train_data = data[:int(size_data * train_frac)]
@@ -44,19 +44,19 @@ val_data   = data[int(size_data * train_frac):]
 
 token_manager  = TokenManager(token_lib)
 context_length = 32
-batch_size     = int(3e4)
-sample_size    = batch_size * 10
+batch_size     = int(1e4)
+sample_size    = int(1e5)
 num_workers    = 16
 
 dataset_train    = TinyShakespearDataset(data_source = train_data, context_length = context_length, sample_size = sample_size)
 dataset_validate = TinyShakespearDataset(data_source = val_data  , context_length = context_length, sample_size = sample_size)
 dataloader_train = torch.utils.data.DataLoader( dataset_train,
-                                                shuffle     = False,
+                                                shuffle     = True,
                                                 pin_memory  = True,
                                                 batch_size  = batch_size,
                                                 num_workers = num_workers, )
 dataloader_validate = torch.utils.data.DataLoader( dataset_validate,
-                                                shuffle     = False,
+                                                shuffle     = True,
                                                 pin_memory  = True,
                                                 batch_size  = batch_size,
                                                 num_workers = num_workers, )
@@ -81,12 +81,13 @@ param_iter = model.module.parameters() if hasattr(model, "module") else model.pa
 optimizer = optim.AdamW(param_iter,
                         lr = lr,
                         weight_decay = weight_decay)
-scheduler = ReduceLROnPlateau(optimizer, mode           = 'min',
-                                         factor         = 2e-1,
-                                         patience       = 10,
-                                         threshold      = 1e-4,
-                                         threshold_mode ='rel',
-                                         verbose        = True)
+## scheduler = ReduceLROnPlateau(optimizer, mode           = 'min',
+##                                          factor         = 2e-1,
+##                                          patience       = 10,
+##                                          threshold      = 1e-4,
+##                                          threshold_mode ='rel',
+##                                          verbose        = True)
+scheduler = None
 
 
 # [[[ TRAIN LOOP ]]]
@@ -104,6 +105,8 @@ if path_chkpt_prev is not None:
 logger.info(f"Current timestamp: {timestamp}")
 
 uses_mixed_precision = True
+chkpt_saving_period  = 10
+epoch_unstable_end  = 1000
 for epoch in tqdm.tqdm(range(max_epochs)):
     epoch += epoch_min
 
@@ -116,7 +119,7 @@ for epoch in tqdm.tqdm(range(max_epochs)):
 
     # Fetch batches...
     train_loss_list = []
-    batch_train = tqdm.tqdm(enumerate(dataloader_train), total = len(dataloader_train))
+    batch_train = tqdm.tqdm(enumerate(dataloader_train), total = len(dataloader_train), disable=True)
     for batch_idx, batch_entry in batch_train:
         # Unpack the batch entry and move them to device...
         batch_input, batch_target = batch_entry
@@ -170,7 +173,7 @@ for epoch in tqdm.tqdm(range(max_epochs)):
 
     # Fetch batches...
     validate_loss_list = []
-    batch_validate = tqdm.tqdm(enumerate(dataloader_validate), total = len(dataloader_validate))
+    batch_validate = tqdm.tqdm(enumerate(dataloader_validate), total = len(dataloader_validate), disable = True)
     for batch_idx, batch_entry in batch_validate:
         # Unpack the batch entry and move them to device...
         batch_input, batch_target = batch_entry
@@ -213,14 +216,20 @@ for epoch in tqdm.tqdm(range(max_epochs)):
     logger.info(f"MSG (device:{device}) - epoch {epoch}, lr used = {lr_used}")
 
     # Update learning rate in the scheduler...
-    scheduler.step(validate_loss_mean)
+    if scheduler is not None: scheduler.step(validate_loss_mean)
 
 
     # ___/ SAVE CHECKPOINT??? \___
     if validate_loss_mean < loss_min:
         loss_min = validate_loss_mean
 
-        fl_chkpt   = f"{timestamp}.epoch_{epoch}.chkpt"
-        path_chkpt = os.path.join(drc_chkpt, fl_chkpt)
-        save_checkpoint(model, optimizer, scheduler, epoch, loss_min, path_chkpt)
-        logger.info(f"MSG (device:{device}) - save {path_chkpt}")
+        if (epoch % chkpt_saving_period == 0) or (epoch > epoch_unstable_end):
+            fl_chkpt   = f"{timestamp}.epoch_{epoch}.chkpt"
+            path_chkpt = os.path.join(drc_chkpt, fl_chkpt)
+            save_checkpoint(model, optimizer, scheduler, epoch, loss_min, path_chkpt)
+            logger.info(f"MSG (device:{device}) - save {path_chkpt}")
+
+
+    # Shuffle the dataset...
+    dataset_train.update_random_dataset()
+    dataset_validate.update_random_dataset()
