@@ -12,6 +12,7 @@ class SingleHeadAttention(nn.Module):
         self.dropout   = dropout
 
         # Self-attention layer to update each node by aggregating features from all other nodes...
+        # The message-passing based communication happens in another vector space.
         self.proj_q = nn.Linear(self.embd_size, self.head_size)    # What do I (this node) want?
         self.proj_k = nn.Linear(self.embd_size, self.head_size)    # What do I have publicly?
         self.proj_v = nn.Linear(self.embd_size, self.head_size)    # What do I provide to update the entire graph?
@@ -73,7 +74,7 @@ class MultiHeadAttention(nn.Module):
 
 
     def forward(self, x):
-        y = [ layer(x) for layer in self.multi_head_att_layer ]
+        y = [ single_head_att_layer(x) for single_head_att_layer in self.multi_head_att_layer ]
         y = torch.cat(y, dim = -1)    # ...concatenate the head embedding dimension
 
         y = self.proj_linear(y)
