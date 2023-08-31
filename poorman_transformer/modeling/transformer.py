@@ -4,12 +4,13 @@ import torch.nn.functional as F
 
 
 class SingleHeadAttention(nn.Module):
-    def __init__(self, embd_size, context_length, head_size, dropout = 0.0):
+    def __init__(self, embd_size, context_length, head_size, dropout = 0.0, uses_causal_mask = False):
         super().__init__()
 
-        self.embd_size = embd_size
-        self.head_size = head_size
-        self.dropout   = dropout
+        self.embd_size        = embd_size
+        self.head_size        = head_size
+        self.dropout          = dropout
+        self.uses_causal_mask = uses_causal_mask
 
         # Self-attention layer to update each node by aggregating features from all other nodes...
         # The message-passing based communication happens in another vector space.
@@ -46,8 +47,10 @@ class SingleHeadAttention(nn.Module):
         w = q @ k.permute(0,2,1)    # Q @ K.T -> (B, T, T)
         w /= torch.sqrt(torch.tensor(self.head_size))
 
-        # Masking in the decoder...
-        w[:,self.mask[:T,:T]] = float('-inf')    # (B, :T, :T)   `:T` means upto `T`
+        # Use causal mask???
+        if self.uses_causal_mask:
+            # Masking in the decoder to enable causal relation...
+            w[:,self.mask[:T,:T]] = float('-inf')    # (B, :T, :T)   `:T` means upto `T`
 
         # Obtain the softmax...
         w = w.softmax(dim = -1)
@@ -61,11 +64,11 @@ class SingleHeadAttention(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, embd_size, context_length, head_size, dropout = 0.0):
+    def __init__(self, embd_size, context_length, head_size, dropout = 0.0, uses_causal_mask = False):
         super().__init__()
 
         num_heads = embd_size // head_size
-        self.multi_head_att_layer = nn.ModuleList([ SingleHeadAttention(embd_size, context_length, head_size) for _ in range(num_heads) ])
+        self.multi_head_att_layer = nn.ModuleList([ SingleHeadAttention(embd_size, context_length, head_size, dropout, uses_causal_mask) for _ in range(num_heads) ])
 
         self.proj_linear = nn.Linear(embd_size, embd_size)
 
@@ -105,12 +108,12 @@ class FeedForward(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, embd_size, context_length, num_heads):
+    def __init__(self, embd_size, context_length, num_heads, dropout = 0.0, uses_causal_mask = False):
         super().__init__()
 
         # Define the multi head attention layer to update node position in a sub space using an attention head...
         head_size = embd_size // num_heads
-        self.multi_head_att_layer = MultiHeadAttention(embd_size, context_length, head_size)
+        self.multi_head_att_layer = MultiHeadAttention(embd_size, context_length, head_size, dropout, uses_causal_mask)
 
         # Define the feedforward layer to add non-linearity to the model...
         self.ff_layer = FeedForward(embd_size)
@@ -157,7 +160,7 @@ class TransformerBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, token_lib_size, embd_size, context_length, num_blocks, num_heads):
+    def __init__(self, token_lib_size, embd_size, context_length, num_blocks, num_heads, dropout = 0.0, uses_causal_mask = False):
         super().__init__()
 
         # Define token embedding layer to embed each node to a vector space...
@@ -169,7 +172,7 @@ class Transformer(nn.Module):
         # Define the multi head attention layer to update node position in a sub space using an attention head...
         head_size = embd_size // num_heads
         self.transformer_block = nn.Sequential(*tuple(
-            TransformerBlock(embd_size, context_length, num_heads) for _ in range(num_blocks)
+            TransformerBlock(embd_size, context_length, num_heads, dropout, uses_causal_mask) for _ in range(num_blocks)
         ))
 
         # Define layer norm used in the subsequent prediction head...
