@@ -4,13 +4,19 @@ import torch.nn.functional as F
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, embd_size, context_length, head_size, dropout = 0.0, uses_causal_mask = False):
+    def __init__(self, embd_size,
+                       context_length,
+                       head_size,
+                       uses_causal_mask  = False,
+                       attention_dropout = 0.0,
+                       residual_dropout  = 0.0):
         super().__init__()
 
-        self.embd_size        = embd_size
-        self.head_size        = head_size
-        self.dropout          = dropout
-        self.uses_causal_mask = uses_causal_mask
+        self.embd_size         = embd_size
+        self.head_size         = head_size
+        self.attention_dropout = attention_dropout
+        self.residual_dropout  = residual_dropout
+        self.uses_causal_mask  = uses_causal_mask
 
         # Internal variable
         self._num_heads = embd_size // head_size
@@ -28,8 +34,11 @@ class MultiHeadAttention(nn.Module):
         # Linear projection...
         self.proj_linear = nn.Linear(embd_size, embd_size)
 
+        # Use dropout after softmax...
+        self.attention_dropout = nn.Dropout(attention_dropout)
+
         # Use dropout at the end...
-        self.dropout = nn.Dropout(dropout)
+        self.residual_dropout = nn.Dropout(residual_dropout)
 
 
     def forward(self, x):
@@ -65,6 +74,8 @@ class MultiHeadAttention(nn.Module):
         a = w @ v    # (B, num_heads, T, T) @ (B, num_heads, T, head_size) ->
                      # (B, num_heads, T, head_size)
 
+        a = self.attention_dropout(a)
+
         # Reshape it to (B, T, E)...
         a = a.transpose(2, 1).contiguous()    # (B, num_heads, T, head_size) -> (B, T, num_heads, head_size)
         a = a.view(B, T, E)
@@ -73,7 +84,7 @@ class MultiHeadAttention(nn.Module):
         y = self.proj_linear(a)
 
         # Optional dropout...
-        y = self.dropout(y)
+        y = self.residual_dropout(y)
 
         return y
 
@@ -99,15 +110,26 @@ class FeedForward(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, embd_size, context_length, num_heads, dropout = 0.0, uses_causal_mask = False):
+    def __init__(self, embd_size, 
+                       context_length,
+                       num_heads,
+                       uses_causal_mask    = False,
+                       attention_dropout   = 0.0,
+                       residual_dropout    = 0.0,
+                       feedforward_dropout = 0.0):
         super().__init__()
 
         # Define the multi head attention layer to update node position in a sub space using an attention head...
         head_size = embd_size // num_heads
-        self.multi_head_att_layer = MultiHeadAttention(embd_size, context_length, head_size, dropout, uses_causal_mask)
+        self.multi_head_att_layer = MultiHeadAttention(embd_size,
+                                                       context_length,
+                                                       head_size,
+                                                       uses_causal_mask  = uses_causal_mask,
+                                                       attention_dropout = attention_dropout,
+                                                       residual_dropout  = residual_dropout)
 
         # Define the feedforward layer to add non-linearity to the model...
-        self.ff_layer = FeedForward(embd_size)
+        self.ff_layer = FeedForward(embd_size, dropout = feedforward_dropout)
 
         # Define layers to optimize model training...
         self.layer_norm_pre_multi_head  = nn.LayerNorm(embd_size)
@@ -151,7 +173,15 @@ class TransformerBlock(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, token_lib_size, embd_size, context_length, num_blocks, num_heads, dropout = 0.0, uses_causal_mask = False):
+    def __init__(self, token_lib_size,
+                       embd_size,
+                       context_length,
+                       num_blocks,
+                       num_heads,
+                       uses_causal_mask    = False,
+                       attention_dropout   = 0.0,
+                       residual_dropout    = 0.0,
+                       feedforward_dropout = 0.0):
         super().__init__()
 
         # Define token embedding layer to embed each node to a vector space...
@@ -163,7 +193,13 @@ class Transformer(nn.Module):
         # Define the multi head attention layer to update node position in a sub space using an attention head...
         head_size = embd_size // num_heads
         self.transformer_block = nn.Sequential(*tuple(
-            TransformerBlock(embd_size, context_length, num_heads, dropout, uses_causal_mask) for _ in range(num_blocks)
+            TransformerBlock(embd_size,
+                             context_length,
+                             num_heads,
+                             uses_causal_mask    = uses_causal_mask,
+                             attention_dropout   = attention_dropout,
+                             residual_dropout    = residual_dropout,
+                             feedforward_dropout = feedforward_dropout) for _ in range(num_blocks)
         ))
 
         # Define layer norm used in the subsequent prediction head...
@@ -190,7 +226,6 @@ class Transformer(nn.Module):
 
         nodes_embd = nodes_tok_embd + nodes_pos_embd    # (B, T, E) + (T, E)    =
                                                         # (B, T, E) + (1, T, E) = (B, T, E)
-
 
         # ___/ MULTI-HEAD ATTENTION BLOCK \___
         # Go through multi-head attention to update nodes in vector space...
