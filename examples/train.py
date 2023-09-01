@@ -70,7 +70,15 @@ num_heads      = embd_size // head_size
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-model = Transformer(token_lib_size, embd_size, context_length, num_blocks, num_heads).to(device)
+model = Transformer(token_lib_size,
+                    embd_size,
+                    context_length,
+                    num_blocks,
+                    num_heads,
+                    uses_causal_mask    = True,
+                    attention_dropout   = 0.1,
+                    residual_dropout    = 0.1,
+                    feedforward_dropout = 0.1).to(device)
 logger.info(f'{sum(p.numel() for p in model.parameters())/1e6}, M parameters')
 
 criterion = nn.CrossEntropyLoss()
@@ -81,13 +89,13 @@ param_iter = model.module.parameters() if hasattr(model, "module") else model.pa
 optimizer = optim.AdamW(param_iter,
                         lr = lr,
                         weight_decay = weight_decay)
-## scheduler = ReduceLROnPlateau(optimizer, mode           = 'min',
-##                                          factor         = 2e-1,
-##                                          patience       = 10,
-##                                          threshold      = 1e-4,
-##                                          threshold_mode ='rel',
-##                                          verbose        = True)
-scheduler = None
+scheduler = ReduceLROnPlateau(optimizer, mode           = 'min',
+                                         factor         = 2e-1,
+                                         patience       = 20,
+                                         threshold      = 1e-4,
+                                         threshold_mode ='rel',
+                                         verbose        = True)
+## scheduler = None
 
 
 # [[[ TRAIN LOOP ]]]
@@ -106,7 +114,7 @@ logger.info(f"Current timestamp: {timestamp}")
 
 uses_mixed_precision = True
 chkpt_saving_period  = 10
-epoch_unstable_end  = 1000
+epoch_unstable_end  = 200
 for epoch in tqdm.tqdm(range(max_epochs)):
     epoch += epoch_min
 
