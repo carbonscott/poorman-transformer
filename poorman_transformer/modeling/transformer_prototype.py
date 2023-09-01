@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class MultiHeadAttention(nn.Module):
+class SingleHeadAttention(nn.Module):
     def __init__(self, embd_size, context_length, head_size, dropout = 0.0, uses_causal_mask = False):
         super().__init__()
 
@@ -12,20 +12,64 @@ class MultiHeadAttention(nn.Module):
         self.dropout          = dropout
         self.uses_causal_mask = uses_causal_mask
 
-        # Internal variable
-        self._num_heads = embd_size // head_size
-
         # Self-attention layer to update each node by aggregating features from all other nodes...
         # The message-passing based communication happens in another vector space.
-        self.proj_q = nn.Linear(self.embd_size, self.embd_size)    # What do I (this node) want?
-        self.proj_k = nn.Linear(self.embd_size, self.embd_size)    # What do I have publicly?
-        self.proj_v = nn.Linear(self.embd_size, self.embd_size)    # What do I provide to update the entire graph?
+        self.proj_q = nn.Linear(self.embd_size, self.head_size)    # What do I (this node) want?
+        self.proj_k = nn.Linear(self.embd_size, self.head_size)    # What do I have publicly?
+        self.proj_v = nn.Linear(self.embd_size, self.head_size)    # What do I provide to update the entire graph?
 
         # Store a mask to prevent it from gradient tracking...
         mask = torch.ones(context_length, context_length).triu(diagonal=1).bool()
         self.register_buffer('mask', mask)
 
-        # Linear projection...
+        # Use dropout after the scaled dot self-attention...
+        self.dropout = nn.Dropout(dropout)
+
+
+    def forward(self, x):
+        """
+        B: Batch, T: Context length, E: Embedding length, H: Head Embedding length
+        Arguments:
+            x : (B, T, E)
+
+        Return:
+            a : (B, T, H)
+                Nodes (embd per token) updated ('Jiggled') through weighted sum (aggregation).
+        """
+        B, T, E = x.shape
+
+        # Linearly project them to a vector space...
+        q = self.proj_q(x)
+        k = self.proj_k(x)
+        v = self.proj_v(x)
+
+        # Scaled dot product...
+        w = q @ k.permute(0,2,1)    # Q @ K.T -> (B, T, T)
+        w /= torch.sqrt(torch.tensor(self.head_size))
+
+        # Use causal mask???
+        if self.uses_causal_mask:
+            # Masking in the decoder to enable causal relation...
+            w[:,self.mask[:T,:T]] = float('-inf')    # (B, :T, :T)   `:T` means upto `T`
+
+        # Obtain the softmax...
+        w = w.softmax(dim = -1)
+
+        # Aggregate information from all nodes...
+        a = w @ v
+
+        return a
+
+
+
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, embd_size, context_length, head_size, dropout = 0.0, uses_causal_mask = False):
+        super().__init__()
+
+        num_heads = embd_size // head_size
+        self.multi_head_att_layer = nn.ModuleList([ SingleHeadAttention(embd_size, context_length, head_size, dropout, uses_causal_mask) for _ in range(num_heads) ])
+
         self.proj_linear = nn.Linear(embd_size, embd_size)
 
         # Use dropout at the end...
@@ -33,46 +77,11 @@ class MultiHeadAttention(nn.Module):
 
 
     def forward(self, x):
-        B, T, E = x.shape
+        y = [ single_head_att_layer(x) for single_head_att_layer in self.multi_head_att_layer ]
+        y = torch.cat(y, dim = -1)    # ...concatenate the head embedding dimension
 
-        num_heads = self._num_heads
-        head_size = self.head_size
+        y = self.proj_linear(y)
 
-        # Linearly project them to a vector space...
-        q = self.proj_q(x)   # B, T, E
-        k = self.proj_k(x)   # B, T, E
-        v = self.proj_v(x)   # B, T, E
-
-        # Changes the view to facilitate scaled dot product within each head...
-        q = q.view(B, T, num_heads, head_size).transpose(1, 2)   # (B, num_heads, T, head_size)
-        k = k.view(B, T, num_heads, head_size).transpose(1, 2)   # (B, num_heads, T, head_size)
-        v = v.view(B, T, num_heads, head_size).transpose(1, 2)   # (B, num_heads, T, head_size)
-
-        # Scaled dot product...
-        w = q @ k.transpose(-1, -2)    # (B, num_heads, T, head_size) @ (B, num_heads, head_size, T) ->
-                                       # (B, num_heads, T, T)
-        w /= torch.sqrt(torch.tensor(head_size))
-
-        # Use causal mask???
-        if self.uses_causal_mask:
-            # Masking in the decoder to enable causal relation...
-            w[:, :,self.mask[:T,:T]] = float('-inf')    # (B, num_heads, :T, :T)   `:T` means upto `T`
-
-        # Obtain the softmax...
-        w = w.softmax(dim = -1)    # (B, num_heads, T, T)
-
-        # Aggregate information from all nodes...
-        a = w @ v    # (B, num_heads, T, T) @ (B, num_heads, T, head_size) ->
-                     # (B, num_heads, T, head_size)
-
-        # Reshape it to (B, T, E)...
-        a = a.transpose(2, 1).contiguous()    # (B, num_heads, T, head_size) -> (B, T, num_heads, head_size)
-        a = a.view(B, T, E)
-
-        # Linear projection...
-        y = self.proj_linear(a)
-
-        # Optional dropout...
         y = self.dropout(y)
 
         return y
